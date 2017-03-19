@@ -111,15 +111,15 @@ def buildtree(root, cursor, bitstream):
     return root, cursor
 
 
-def uncompress(bitstream, destfile, debuggy=False):
+def uncompress(bitstream, debuggy=False):
     cursor = 0
     root = TreeNode()
-    bytes_written = 0
+    byte_list = []
 
     root, cursor = buildtree(root, cursor, bitstream)
     if root is None:
         print("Tree construction failed, exiting")
-        return
+        return bytes()
 
     if debuggy:
         print("Tree parsing finished: cursor at %x, bit #%d" % (math.floor(cursor/8), cursor % 8))
@@ -131,37 +131,32 @@ def uncompress(bitstream, destfile, debuggy=False):
             try:
                 chu = bitstream[cursor]
             except IndexError:
-                return
+                return bytes(byte_list)
             cursor += 1
             if chu == False:
                 tarzan = tarzan.childzero
             else:
                 tarzan = tarzan.childone
-        destfile.write(tarzan.value)
-        bytes_written += 1
+        byte_list.append(ord(tarzan.value))
 
 
-def collectBytes(Lb, multib, sourcefile, start_offs, end_offs):
-    sourcefile.seek(start_offs, 0)
-    readbyte = sourcefile.read(1)
-    target_read = 0
-    while readbyte and (target_read < (end_offs - start_offs)):
+def collectBytes(Lb, multib, block):
+    for readbyte_int in block:
+        readbyte = struct.pack("B", readbyte_int)
         if readbyte not in Lb:
             Lb.append(readbyte)
             multib[readbyte] = 1
         else:
             multib[readbyte] += 1
-        readbyte = sourcefile.read(1)
-        target_read += 1
 
 
-def buildHuffmanTree(sourcefile, start_offs, end_offs):
+def buildHuffmanTree(block):
     Lb = []
     multib = {}
     nodemap = []
     def keyfun(elem):
         return multib[elem]
-    collectBytes(Lb, multib, sourcefile, start_offs, end_offs)
+    collectBytes(Lb, multib, block)
     Lb = sorted(Lb, key=keyfun)
 
     for b in Lb:
@@ -186,7 +181,7 @@ def buildHuffmanTree(sourcefile, start_offs, end_offs):
     return nodemap[0][1]
 
 
-def compress(sourcefile, start_offs, end_offs, debuggy=False):
+def compress(block, debuggy=False):
     """ :return: bitarray object containing the compressed data """
     lookup_table = {}
     vecbuild_path = bitarray.bitarray(endian="big")
@@ -216,21 +211,17 @@ def compress(sourcefile, start_offs, end_offs, debuggy=False):
             build_vector_tree(node.childzero)
             build_vector_tree(node.childone)
 
-    tree = buildHuffmanTree(sourcefile, start_offs, end_offs)
-    sourcefile.seek(start_offs)
+    tree = buildHuffmanTree(block)
 
     if debuggy:
         tree2dot(tree, "optimumtree.dot")
 
     build_vector_tree(tree)
 
-    datum = sourcefile.read(1)
-    target_read = 0
-    while datum and (target_read < (end_offs - start_offs)):
+    for datum_int in block:
+        datum = struct.pack("B", datum_int)
         if datum not in lookup_table.keys():
             build_lookup_table(tree, bitarray.bitarray(endian="big"), datum)
         out_bitstream.extend(lookup_table[datum])
-        datum = sourcefile.read(1)
-        target_read += 1
 
     return out_bitstream

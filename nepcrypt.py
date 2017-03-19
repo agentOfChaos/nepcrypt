@@ -1,8 +1,14 @@
 import argparse
 import os
+import sys
 import bitarray
+import secrets
+import struct
 
 from engine import huffman, key_routine, encryption
+
+
+block_size = 20 * 1024
 
 
 """
@@ -25,32 +31,63 @@ def parsecli():
     return parser.parse_args()
 
 
+def encrypt_block(block, key, seqnum, nonce, just_compress=False):
+    bitblob = huffman.compress(block)
+    bytelist = bytearray(bitblob.tobytes())
+
+    if just_compress:
+        return bytelist, seqnum + 1
+
+    keystream = key_routine.get_key_stream(key, nonce, seqnum)
+    encryption.encrypt_decrypt(bytelist, keystream)
+    return bytelist, seqnum + 1
+
+
+def decrypt_block(block, key, seqnum, nonce, just_compress=False):
+    bytelist = bytearray(block)
+    keystream = key_routine.get_key_stream(key, nonce, seqnum)
+
+    if not just_compress:
+        encryption.encrypt_decrypt(bytelist, keystream)
+
+    bitblob = bitarray.bitarray(endian="big")
+    bitblob.frombytes(bytes(bytelist))
+
+    return huffman.uncompress(bitblob), seqnum + 1
+
+
 def encrypt(cli):
-    input_filesize = os.stat(cli.input).st_size
     with open(cli.input, "rb") as loadfile:
-        bitblob = huffman.compress(loadfile, 0, input_filesize)
-        if cli.just_compress:
-            with open(cli.output, "wb") as savefile:
-                bitblob.tofile(savefile)
-        else:
-            key = key_routine.get_key()
-            bytelist = bytearray(bitblob.tobytes())
-            encryption.encrypt_decrypt(bytelist, key)
-            with open(cli.output, "wb") as savefile:
-                savefile.write(bytelist)
+        with open(cli.output, "wb") as savefile:
+            nonce = secrets.randbelow(sys.maxsize)
+            seqnum = 0
+            key = key_routine.acquire_key()
+            if not cli.just_compress:
+                savefile.write(struct.pack("Q", nonce))
+            while True:
+                block = loadfile.read(block_size)
+                if len(block) == 0:
+                    break
+                encrypted, seqnum = encrypt_block(block, key, seqnum, nonce, just_compress=cli.just_compress)
+                savefile.write(encrypted)
 
 
 def decrypt(cli):
     with open(cli.input, "rb") as loadfile:
-        bytelist = bytearray(loadfile.read())
-        if not cli.just_compress:
-            key = key_routine.get_key()
-            encryption.encrypt_decrypt(bytelist, key)
-
-        bitstream = bitarray.bitarray(endian="big")
-        bitstream.frombytes(bytes(bytelist))
         with open(cli.output, "wb") as savefile:
-            huffman.uncompress(bitstream, savefile)
+            if cli.just_compress:
+                nonce = 0
+            else:
+                nonce = struct.unpack("Q", loadfile.read(8))[0]
+            seqnum = 0
+            key = key_routine.acquire_key()
+            while True:
+                block = loadfile.read(block_size)
+                if len(block) == 0:
+                    break
+                decrypted, seqnum = decrypt_block(block, key, seqnum, nonce, just_compress=cli.just_compress)
+                savefile.write(decrypted)
+
 
 
 if __name__ == "__main__":
